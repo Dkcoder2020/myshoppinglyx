@@ -1,0 +1,403 @@
+from django.shortcuts import render,redirect
+from django.views import View
+from app.models import Product,OrderPlace,Customer,Cart
+from django.contrib.auth.models import User
+from django.contrib import messages
+from django.db.models import Q
+
+from .models import Profile
+import random
+import http.client
+from django.http import HttpResponse,JsonResponse
+from django.conf import settings
+from twilio.rest import Client
+from django.contrib.auth import authenticate, login,logout
+from django.contrib.auth.decorators import login_required
+from django.utils.decorators import method_decorator
+# def home(request):
+#  return render(request, 'app/home.html')
+
+class ProductView(View):
+    def get(self, request):
+        topwear=Product.objects.filter(categary='TW')
+        bottomwear=Product.objects.filter(categary='BW')
+        mobile=Product.objects.filter(categary='M')
+        laptop=Product.objects.filter(categary='L')
+         
+        return render(request,'app/home.html',{'topwear':topwear,'bottomwear':bottomwear,'mobile':mobile,'laptop':laptop})
+
+class ProductDetailView(View):
+    def get(self,request,id):
+        product=Product.objects.get(id=id)
+        item_already_in_cart=False
+        if request.user.is_authenticated:
+            item_already_in_cart=Cart.objects.filter(Q(product=product.id) & Q(user=request.user)).exists()
+        return render(request, 'app/productdetail.html',{'product':product,'item_already_in_cart':item_already_in_cart})
+
+class MobileView(View):
+    def get(self, request,data=None):
+        if data==None:
+            mobile=Product.objects.filter(categary="M")
+        elif data=='samsang' or data=='redmi':
+            mobile=Product.objects.filter(categary="M").filter(brand=data)
+        
+        elif data=='below':
+            mobile=Product.objects.filter(categary="M").filter(selling_price__lt='10000')
+
+        elif data =='above':
+            mobile=Product.objects.filter(categary="M").filter(selling_price__gte='10000')
+        return render(request, 'app/mobile.html', {'mobile':mobile})
+
+class LaptopView(View):
+       def get(self, request,data=None):
+        if data==None:
+            laptop=Product.objects.filter(categary="L")
+        elif data=='hp' or data=='dell':
+            laptop=Product.objects.filter(categary="L").filter(brand=data)
+
+        elif data=='below':
+            laptop=Product.objects.filter(categary="L").filter(selling_price__lt='20000')
+
+        elif data =='above':
+            laptop=Product.objects.filter(categary="L").filter(selling_price__gte='20000')
+        return render(request, 'app/laptop.html', {'laptop':laptop})
+
+class TopwearView(View):
+     def get(self, request,data=None):
+        if data==None:
+           topwear=Product.objects.filter(categary="TW")
+
+        elif data=='below':
+            topwear=Product.objects.filter(categary="TW").filter(selling_price__lt='500')
+
+        elif data =='above':
+            topwear=Product.objects.filter(categary="TW").filter(selling_price__gte='500')
+        return render(request, 'app/topwear.html', {'topwear':topwear})
+
+
+
+class BottomView(View):
+    def get(self, request,data=None):
+        if data==None:
+            bottomwear=Product.objects.filter(categary="BW")
+
+        elif data=='below':
+            bottomwear=Product.objects.filter(categary="BW").filter(selling_price__lt='500')
+
+        elif data =='above':
+            bottomwear=Product.objects.filter(categary="BW").filter(selling_price__gte='500')
+        return render(request, 'app/bottomwear.html', {'bottomwear':bottomwear})
+
+@method_decorator(login_required, name='dispatch')
+class AddToCartView(View):
+    def get(self, request):
+        user=request.user
+        product_id=request.GET.get('pro_id')
+        print(product_id)
+        product=Product.objects.get(id=product_id)
+        Cart(user=user , product=product).save()
+        return redirect('cart')
+@method_decorator(login_required, name='dispatch')
+class ShowCartView(View):
+    def get(self, request):
+        if request.user.is_authenticated:
+            user= request.user
+            carts=Cart.objects.filter(user=user)
+            amount=0.0
+            shipping_amount=70
+            totalamount=0.0
+
+            cart_product=[p for p in Cart.objects.all() if p.user==user]
+            if cart_product:
+                for p in cart_product:
+                    temamount=(p.quantity * p.product.discount_price)
+                    amount += temamount
+                    totalamount=amount+shipping_amount
+
+                return render(request,'app/addtocart.html',{'carts':carts,'totalamount':totalamount,'amount':amount})
+            else:
+                return render(request,'app/emptycart.html')
+
+
+class PlusCartView(View):
+    def get(self, request):
+        if request.method =='GET':
+            prod_id=request.GET['prod_id']
+            print(prod_id)
+            c=Cart.objects.get(Q(product=prod_id) & Q(user=request.user))
+    
+            c.quantity+=1
+            c.save()
+            amount=0.0
+            shipping_amount=70
+            totalamount=0.0
+            cart_product=[p for p in Cart.objects.all() if p.user == request.user]
+            for p in cart_product:
+                temamount=(p.quantity * p.product.discount_price)
+                amount += temamount
+              
+                
+            data={
+                'quantity':c.quantity,
+                'amount':amount,
+                'totalamount':amount+shipping_amount
+            }
+            return JsonResponse(data)
+
+
+class MinusCartView(View):
+    def get(self, request):
+        if request.method =='GET':
+            prod_id=request.GET['prod_id']
+            print(prod_id)
+            c=Cart.objects.get(Q(product=prod_id) & Q(user=request.user))
+    
+            c.quantity-=1
+            c.save()
+            amount=0.0
+            shipping_amount=70
+            totalamount=0.0
+            cart_product=[p for p in Cart.objects.all() if p.user == request.user]
+            for p in cart_product:
+                temamount=(p.quantity * p.product.discount_price)
+                amount += temamount
+              
+                
+            data={
+                'quantity':c.quantity,
+                'amount':amount,
+                'totalamount':amount+shipping_amount
+            }
+            return JsonResponse(data)
+
+
+
+class RemoveCartView(View):
+    def get(self, request):
+        if request.method =='GET':
+            prod_id=request.GET['prod_id']
+            print(prod_id)
+            c=Cart.objects.get(Q(product=prod_id) & Q(user=request.user))
+            c.delete()
+            amount=0.0
+            shipping_amount=70
+            totalamount=0.0
+            cart_product=[p for p in Cart.objects.all() if p.user == request.user]
+            for p in cart_product:
+                temamount=(p.quantity * p.product.discount_price)
+                amount += temamount
+                
+            data={
+                
+                'amount':amount,
+                'totalamount':amount+shipping_amount,
+            }
+            return JsonResponse(data)
+
+@method_decorator(login_required, name='dispatch')
+class CheckoutView(View):
+    def get(self,request):
+        user=request.user
+        add=Customer.objects.filter(user=user)
+        cart_item=Cart.objects.filter(user=user)
+        amount=0.0
+        shipping_amount=70
+        totalamount=0.0
+        cart_product=[p for p in Cart.objects.all() if p.user == request.user]
+        for p in cart_product:
+            temamount=(p.quantity * p.product.discount_price)
+            amount += temamount
+            totalamount= amount+shipping_amount
+                
+        return render(request, 'app/checkout.html',{'add':add,'cart_item':cart_item,'totalamount':totalamount})
+
+@method_decorator(login_required, name='dispatch')
+class PaymentDoneView(View):
+    def get(self,request):
+        user=request.user
+        custid=request.GET.get('custid')
+        customer=Customer.objects.get(id=custid)
+        carts= Cart.objects.filter(user=user)
+        for c in carts:
+            OrderPlace(user=user,customer=customer,product=c.product,quantity=c.quantity).save()
+            c.delete()
+                
+        return redirect("orders")
+
+
+
+def buy_now(request):
+    return render(request, 'app/buynow.html')
+
+
+@method_decorator(login_required, name='dispatch')
+class ProfileView(View):
+    def get(self, request):
+
+        return render(request, 'app/profile.html')
+    def post(self,request):
+        if request.method == 'POST':
+            get_user=request.user
+            name = request.POST.get('name')
+            locality = request.POST.get('locality')
+            city = request.POST.get('city')
+            state = request.POST.get('state')
+            zipcode = request.POST.get('zipcode')
+        
+            reg=Customer(user=get_user,name=name,locality=locality,city=city,state=state,zipcode=zipcode)
+            reg.save()
+
+            context = {'message' : 'Congratulations!! Profile Updated Successfully' , 'class' : 'success', 'active':'btn-primary'}
+            
+        return render(request, 'app/profile.html' ,context)
+        
+@method_decorator(login_required, name='dispatch')
+class AddressView(View):
+     def get(self, request):
+        address=Customer.objects.filter(user=request.user)
+        return render(request, 'app/address.html',{'address':address , 'active':'btn-primary'})
+
+@method_decorator(login_required, name='dispatch')
+class OrdersView(View):
+     def get(self, request):
+        op=OrderPlace.objects.filter(user=request.user)
+        return render(request, 'app/orders.html',{'order_place':op})
+
+def change_password(request):
+ return render(request, 'app/changepassword.html')
+
+
+
+
+
+
+# class MessageHandler:
+#     phone_number=None
+#     otp=None
+#     def __init__(self,phone_number,otp) -> None:
+#         self.phone_number=phone_number
+#         self.otp=otp
+#     def send_otp_via_message(self):     
+#         client= Client(settings.ACCOUNT_SID,settings.AUTH_TOKEN)
+#         message=client.messages.create(body=f'your otp is:{self.otp}',from_=f'{settings.TWILIO_PHONE_NUMBER}',to=f'{settings.COUNTRY_CODE}{self.phone_number}')
+#     def send_otp_via_whatsapp(self):     
+#         client= Client(settings.ACCOUNT_SID,settings.AUTH_TOKEN)
+#         message=client.messages.create(body=f'your otp is:{self.otp}',from_=f'{settings.TWILIO_WHATSAPP_NUMBER}',to=f'whatsapp:{settings.COUNTRY_CODE}{self.phone_number}')
+
+class MessageHandler:
+    mobile=None 
+    otp=None
+    def __init__(self,mobile,otp) -> None:
+        self.mobile=mobile
+        self.otp=otp
+
+    def send_otp(self):     
+        client= Client(settings.ACCOUNT_SID,settings.AUTH_TOKEN)
+        message=client.messages.create(body=f'your otp is:{self.otp}',from_=f'{settings.TWILIO_PHONE_NUMBER}',to=f'{settings.COUNTRY_CODE}{self.mobile}')
+        return None
+
+
+def login_attempt(request):
+    if request.method == 'POST':
+        mobile = request.POST.get('mobile')
+        user = Profile.objects.filter(mobile = mobile).first()
+        
+        if user is None:
+            context = {'message' : 'User not found' , 'class' : 'danger' }
+            return render(request,'app/login.html' , context)
+        
+        otp = str(random.randint(1000 , 9999))
+        user.otp = otp
+        user.save()
+        # send_otp(mobile , otp)
+        MessageHandler(mobile, otp).send_otp()
+        request.session['mobile'] = mobile
+        return redirect('login_otp')        
+    return render(request,'app/login.html')
+
+
+def login_otp(request):
+    mobile = request.session['mobile']
+    context = {'mobile':mobile}
+    if request.method == 'POST':
+        otp = request.POST.get('otp')
+        profile = Profile.objects.filter(mobile=mobile).first()
+        
+        if otp == profile.otp:
+            user = User.objects.get(id = profile.user.id)
+        
+
+            login(request , user)
+            return redirect('profile')
+        else:
+            context = {'message' : 'Wrong OTP' , 'class' : 'danger','mobile':mobile }
+            return render(request,'app/login_otp.html' , context)
+    
+    return render(request,'app/login_otp.html' , context)
+    
+    
+
+def register(request):
+    if request.method == 'POST':
+        email = request.POST.get('email')
+        username = request.POST.get('username')
+        mobile = request.POST.get('mobile')
+
+        
+        
+        check_user = User.objects.filter(email = email).first()
+        check_profile = Profile.objects.filter(mobile = mobile).first()
+        
+        if check_user or check_profile:
+            context = {'message' : 'User already exists' , 'class' : 'danger' }
+            return render(request,'app/register.html' , context)
+        
+        user = User(email = email , username = username)
+        user.save()
+        otp = str(random.randint(1000 , 9999))
+        profile = Profile(user = user , mobile=mobile , otp = otp) 
+        profile.save()
+        # send_otp(mobile, otp)
+        MessageHandler(mobile, otp).send_otp()
+        request.session['mobile'] = mobile
+        return redirect('otp')
+    return render(request,'app/register.html')
+
+
+
+def otp(request):
+    mobile = request.session['mobile']
+    context = {'mobile':mobile}
+    if request.method == 'POST':
+        otp = request.POST.get('otp')
+        profile = Profile.objects.filter(mobile=mobile).first()
+        
+        if otp == profile.otp:
+            context = {'message' : 'Congratulations!! Registered Successfully' , 'class' : 'success','mobile':mobile }
+            return render(request,'app/register.html' , context)
+        else:
+            print('Wrong')
+            
+            context = {'message' : 'Wrong OTP' , 'class' : 'danger','mobile':mobile }
+            return render(request,'app/otp.html' , context)
+            
+        
+    return render(request,'app/otp.html' , context)
+
+
+def logout_request(request):
+	logout(request)
+	messages.info(request, "You have successfully logged out.") 
+	return redirect("home")
+
+
+
+
+# def faltu_function(request):
+#     get_user = request.user
+#     print(get_user)
+#     print("==========================================================================================")
+    
+    
+#     return render(request, 'app/checkout.html')
+
